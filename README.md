@@ -26,15 +26,6 @@ A web-based Cricket Auction Platform that digitizes and automates the player auc
 
 ---
 
-## 👥 Team Project
-
-This project was developed as a team project.
-
-Original Repository:  
-https://github.com/rakeshn010/cricket-auction-platform1
-
----
-
 ## 📌 Project Purpose
 
 To simulate a professional IPL-style cricket auction digitally with transparency, real-time updates, and structured team budget control.
