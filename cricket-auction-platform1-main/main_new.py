@@ -370,6 +370,16 @@ app.include_router(monitoring_router)
 from routers.security_dashboard import router as security_router
 app.include_router(security_router)
 
+# Include ML predictions router (optional - requires ml_requirements.txt)
+try:
+    from routers.ml_predictions import router as ml_router
+    app.include_router(ml_router)
+    logger.info("✅ ML Predictions API enabled")
+except ImportError as e:
+    logger.warning(f"⚠️ ML Predictions not available: {e}")
+    logger.warning("   Install with: pip install -r ml_requirements.txt")
+    logger.warning("   Train model with: python ml_models/train.py")
+
 
 # Error handlers
 from fastapi.responses import JSONResponse

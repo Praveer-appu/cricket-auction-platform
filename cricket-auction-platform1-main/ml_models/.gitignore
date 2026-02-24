@@ -1,0 +1,8 @@
+# ML Models - Generated files
+saved_models/
+data/
+*.pkl
+*.csv
+*.json
+__pycache__/
+*.pyc

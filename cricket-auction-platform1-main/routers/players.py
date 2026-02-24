@@ -120,16 +120,31 @@ async def public_player_register(
     full_name: str = Form(...),
     role: str = Form(...),  # Playing position (Batsman, Bowler, etc.)
     category: Optional[str] = Form(None),  # Affiliation (Faculty, Student, Alumni)
+    base_price: int = Form(...),  # MANDATORY manual base price
     age: Optional[int] = Form(None),
     batting_style: Optional[str] = Form(None),
     bowling_style: Optional[str] = Form(None),
     bio: Optional[str] = Form(None),
-    photo: Optional[UploadFile] = File(None)
+    photo: UploadFile = File(...),  # MANDATORY photo upload
+    # ML Prediction fields
+    matches_played: int = Form(0),
+    batting_average: float = Form(25.0),
+    strike_rate: float = Form(120.0),
+    wickets: int = Form(10),
+    economy_rate: float = Form(8.0),
+    recent_performance_score: float = Form(70.0)
 ):
-    """Public endpoint for player self-registration with optional image - AUTO-APPROVED."""
+    """Public endpoint for player self-registration with MANDATORY image and manual base price - AUTO-APPROVED."""
     name = (full_name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Full name is required")
+    
+    # Validate base price
+    if not base_price or base_price < 10000:
+        raise HTTPException(
+            status_code=400,
+            detail="Base price must be at least ₹10,000"
+        )
     
     # Check for duplicate player by name (case-insensitive)
     existing_player = db.players.find_one({"name": {"$regex": f"^{name}$", "$options": "i"}})
@@ -155,45 +170,61 @@ async def public_player_register(
             detail=f"Invalid category. Must be one of: {', '.join(sorted(allowed_categories))}"
         )
     
+    # MANDATORY photo validation
+    if not photo or not photo.filename:
+        raise HTTPException(status_code=400, detail="Profile photo is required for registration")
+    
+    # Validate image type
+    allowed_types = ["image/jpeg", "image/jpg", "image/png", "image/webp"]
+    if photo.content_type not in allowed_types:
+        raise HTTPException(
+            status_code=400, 
+            detail="Invalid image type. Only JPG, PNG, and WebP are allowed."
+        )
+    
+    # Read file contents
+    contents = await photo.read()
+    
+    # Validate file size (500KB max)
+    max_size = 500 * 1024  # 500KB
+    if len(contents) > max_size:
+        actual_size_kb = len(contents) / 1024
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Photo size must be less than 500KB. Your photo is {actual_size_kb:.0f}KB. Please compress or choose a smaller photo."
+        )
+    
     image_path = None
     cloudinary_status = "not_attempted"
     
-    if photo and photo.filename:
-        # Validate and save image
-        allowed_types = ["image/jpeg", "image/jpg", "image/png", "image/webp"]
-        if photo.content_type not in allowed_types:
-            raise HTTPException(status_code=400, detail="Invalid image type")
-        
-        contents = await photo.read()
-        if len(contents) > 5 * 1024 * 1024:
-            raise HTTPException(status_code=400, detail="Image too large. Maximum 5MB.")
-        
-        # Try Cloudinary first, fallback to local storage
-        if is_cloudinary_configured():
-            print(f"📤 Uploading to Cloudinary: {photo.filename}")
-            cloudinary_status = "configured"
-            result = upload_image(contents, photo.filename)
-            if result.get("success"):
-                image_path = result.get("url")
-                cloudinary_status = "success"
-                print(f"✅ Cloudinary upload successful: {image_path}")
-            else:
-                cloudinary_status = f"failed: {result.get('error')}"
-                print(f"❌ Cloudinary upload failed: {result.get('error')}")
-                # Don't fallback to local - Railway filesystem is ephemeral
-                print(f"⚠️ Image not saved - Cloudinary required for Railway deployment")
+    # Try Cloudinary first, fallback to local storage
+    if is_cloudinary_configured():
+        print(f"📤 Uploading to Cloudinary: {photo.filename}")
+        cloudinary_status = "configured"
+        result = upload_image(contents, photo.filename)
+        if result.get("success"):
+            image_path = result.get("url")
+            cloudinary_status = "success"
+            print(f"✅ Cloudinary upload successful: {image_path}")
         else:
-            cloudinary_status = "not_configured"
-            print(f"⚠️ Cloudinary not configured - image will not be saved")
-            print(f"   Set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET in Railway")
-    
-    # Set default base price based on category
-    default_base_prices = {
-        "Faculty": 75000,
-        "Student": 50000,
-        "Alumni": 60000
-    }
-    default_base_price = default_base_prices.get(category, 50000)
+            cloudinary_status = f"failed: {result.get('error')}"
+            print(f"❌ Cloudinary upload failed: {result.get('error')}")
+            # Don't fallback to local - Railway filesystem is ephemeral
+            print(f"⚠️ Image not saved - Cloudinary required for Railway deployment")
+    else:
+        # Fallback to local storage for development
+        cloudinary_status = "not_configured"
+        print(f"⚠️ Cloudinary not configured - saving to local storage")
+        
+        file_ext = photo.filename.split(".")[-1]
+        unique_filename = f"player_{uuid.uuid4().hex}.{file_ext}"
+        file_path = UPLOAD_DIR / unique_filename
+        
+        with open(file_path, "wb") as f:
+            f.write(contents)
+        
+        image_path = f"/static/uploads/players/{unique_filename}"
+        print(f"✅ Image saved locally: {image_path}")
     
     player_doc = {
         "name": name,
@@ -204,7 +235,7 @@ async def public_player_register(
         "bowling_style": (bowling_style or "").strip(),
         "bio": (bio or "").strip(),
         "image_path": image_path,
-        "base_price": default_base_price,  # Auto-set base price
+        "base_price": base_price,  # Use manual base price from form
         "base_price_status": "approved",  # Auto-approved
         "status": "available",
         "is_approved": True,  # AUTO-APPROVED - No admin approval needed
@@ -215,7 +246,14 @@ async def public_player_register(
         "final_bid": None,
         "created_by": None,
         "created_at": datetime.now(timezone.utc),
-        "updated_at": datetime.now(timezone.utc)
+        "updated_at": datetime.now(timezone.utc),
+        # ML Prediction fields
+        "matches_played": matches_played,
+        "batting_average": batting_average,
+        "strike_rate": strike_rate,
+        "wickets": wickets,
+        "economy_rate": economy_rate,
+        "recent_performance_score": recent_performance_score
     }
     
     result = db.players.insert_one(player_doc)
@@ -223,8 +261,8 @@ async def public_player_register(
     return {
         "ok": True,
         "player_id": str(result.inserted_id),
-        "message": f"Registration successful! You are now available for auction with base price ₹{default_base_price:,}.",
-        "base_price": default_base_price
+        "message": f"Registration successful! You are now available for auction with base price ₹{base_price:,}.",
+        "base_price": base_price
     }
 
 

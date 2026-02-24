@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>User Dashboard - SKIT Premier League</title>
+  <title>User Dashboard - Cricket Auction Platform</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
   <link rel="stylesheet" href="/static/skit-pro.css" />
@@ -144,7 +144,7 @@
   <div class="dashboard-container">
     <!-- Logo and Welcome Section -->
     <div class="logo-section">
-      <img src="/static/skit-logo.jpg" alt="SKIT College Logo" class="college-logo" />
+      <img src="/static/cricket-auction-logo.svg" alt="Cricket Auction Platform Logo" class="college-logo" />
       <h1 class="welcome-text">Welcome!</h1>
       <p class="subtitle-text">What would you like to do?</p>
     </div>
@@ -217,10 +217,80 @@
           <input name="bowling_style" type="text" class="form-control" placeholder="e.g., Fast" />
         </div>
         
+        <!-- ML Prediction Statistics Section -->
+        <div class="col-12 mt-4">
+          <h5 style="color: var(--primary-gold); border-bottom: 2px solid var(--primary-gold); padding-bottom: 10px;">
+            <i class="fas fa-chart-line me-2"></i>Performance Statistics (for AI Price Prediction)
+          </h5>
+          <p class="text-muted small">These statistics help our AI predict your auction value</p>
+        </div>
+        
+        <div class="col-md-4">
+          <label class="form-label">
+            <i class="fas fa-calendar-check me-1"></i>Matches Played
+          </label>
+          <input name="matches_played" type="number" min="0" class="form-control" placeholder="e.g., 50" value="0" />
+          <small class="text-muted">Total career matches</small>
+        </div>
+        
+        <div class="col-md-4">
+          <label class="form-label">
+            <i class="fas fa-trophy me-1"></i>Batting Average
+          </label>
+          <input name="batting_average" type="number" min="0" step="0.1" class="form-control" placeholder="e.g., 35.5" value="25.0" />
+          <small class="text-muted">Runs per dismissal</small>
+        </div>
+        
+        <div class="col-md-4">
+          <label class="form-label">
+            <i class="fas fa-tachometer-alt me-1"></i>Strike Rate
+          </label>
+          <input name="strike_rate" type="number" min="0" step="0.1" class="form-control" placeholder="e.g., 130.0" value="120.0" />
+          <small class="text-muted">Runs per 100 balls</small>
+        </div>
+        
+        <div class="col-md-4">
+          <label class="form-label">
+            <i class="fas fa-award me-1"></i>Wickets Taken
+          </label>
+          <input name="wickets" type="number" min="0" class="form-control" placeholder="e.g., 15" value="10" />
+          <small class="text-muted">Total career wickets</small>
+        </div>
+        
+        <div class="col-md-4">
+          <label class="form-label">
+            <i class="fas fa-chart-line me-1"></i>Economy Rate
+          </label>
+          <input name="economy_rate" type="number" min="0" step="0.1" class="form-control" placeholder="e.g., 8.0" value="8.0" />
+          <small class="text-muted">Runs conceded per over</small>
+        </div>
+        
+        <div class="col-md-4">
+          <label class="form-label">
+            <i class="fas fa-star me-1"></i>Recent Performance (0-100)
+          </label>
+          <input name="recent_performance_score" type="number" min="0" max="100" class="form-control" placeholder="e.g., 75" value="70" />
+          <small class="text-muted">Overall recent form</small>
+        </div>
+        
         <div class="col-12">
-          <label class="form-label">Profile Photo</label>
-          <input name="photo" type="file" class="form-control" id="player-photo-input" accept="image/*" />
-          <small class="text-muted">Upload your photo (JPG, PNG, max 5MB)</small>
+          <div class="alert alert-info">
+            <i class="fas fa-info-circle me-2"></i>
+            <strong>Note:</strong> These statistics will be used by our AI to predict your auction value. 
+            Teams can see AI-predicted prices based on your performance data.
+          </div>
+        </div>
+        
+        <div class="col-md-6">
+          <label class="form-label">Base Price (Starting Bid) <span class="text-danger">*</span></label>
+          <input name="base_price" type="number" min="10000" step="1000" class="form-control" placeholder="e.g., 50000" required />
+          <small class="text-muted">Minimum ₹10,000 - This is your starting auction price</small>
+        </div>
+        
+        <div class="col-12">
+          <label class="form-label">Profile Photo <span class="text-danger">*</span></label>
+          <input name="photo" type="file" class="form-control" id="player-photo-input" accept="image/*" required />
+          <small class="text-muted">Upload your photo (JPG, PNG, max 500KB) - Required</small>
         </div>
         
         <div class="col-12" id="photo-preview-container" style="display:none;">
@@ -272,6 +342,22 @@
     // Player Registration Form Handler
     document.getElementById('player-form').addEventListener('submit', async (e) => {
       e.preventDefault();
+      
+      // Validate photo is uploaded
+      const photoInput = document.getElementById('player-photo-input');
+      if (!photoInput.files || !photoInput.files[0]) {
+        alert('Please upload your profile photo. It is mandatory for registration.');
+        return;
+      }
+      
+      // Validate photo size again before submission
+      const file = photoInput.files[0];
+      const maxSize = 500 * 1024; // 500KB
+      if (file.size > maxSize) {
+        alert('Photo size must be less than 500KB. Your photo is ' + (file.size / 1024).toFixed(0) + 'KB. Please compress or choose a smaller photo.');
+        return;
+      }
+      
       const formData = new FormData(e.target);
       
       try {
@@ -296,10 +382,19 @@
       }
     });
 
-    // Photo preview functionality
+    // Photo preview functionality with size validation
     document.getElementById('player-photo-input').addEventListener('change', function(e) {
       const file = e.target.files[0];
       if (file) {
+        // Check file size (500KB = 500 * 1024 bytes)
+        const maxSize = 500 * 1024; // 500KB
+        if (file.size > maxSize) {
+          alert('Photo size must be less than 500KB. Your photo is ' + (file.size / 1024).toFixed(0) + 'KB. Please compress or choose a smaller photo.');
+          e.target.value = ''; // Clear the input
+          document.getElementById('photo-preview-container').style.display = 'none';
+          return;
+        }
+        
         const reader = new FileReader();
         reader.onload = function(e) {
           document.getElementById('photo-preview').src = e.target.result;

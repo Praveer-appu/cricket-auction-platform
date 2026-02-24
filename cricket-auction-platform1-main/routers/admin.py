@@ -617,7 +617,7 @@ async def set_live_player(
             print(f"Error in auto-close auction: {e}")
     
     # Start auction timer with auto-close callback
-    await manager.start_timer(30, on_complete_callback=auto_close_auction)
+    await manager.start_timer(settings.AUCTION_TIMER_SECONDS, on_complete_callback=auto_close_auction)
     
     return {
         "ok": True,

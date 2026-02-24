@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     
     # Auction
     BID_INCREMENT: int = 50
-    AUCTION_TIMER_SECONDS: int = 30
+    AUCTION_TIMER_SECONDS: int = 90  # 90 seconds per player
     MAX_CONCURRENT_CONNECTIONS: int = 1000
     
     # File Upload

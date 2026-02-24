@@ -329,6 +329,12 @@ function renderAdminPlayersInTab(players, containerId) {
         const price = p.status === 'sold' ? `₹${(p.final_bid || 0).toLocaleString()}` : `Base: ₹${(p.base_price || 0).toLocaleString()}`;
         const suggested = p.final_bid || p.price ? (p.final_bid || p.price) + 50 : (p.base_price || 100);
 
+        // ML Prediction badge for available players
+        const mlBadge = p.status !== 'sold' ? 
+            `<div class="ml-prediction-badge-admin" id="ml-pred-admin-${p._id}" style="background: linear-gradient(135deg, #667eea, #764ba2); padding: 4px 8px; border-radius: 5px; margin-top: 5px; font-size: 0.7rem; text-align: center;">
+                <span style="color: #fff;">🤖 AI: Loading...</span>
+            </div>` : '';
+
         const card = document.createElement("div");
         card.className = "player-card-admin";
         card.style.position = "relative";
@@ -344,6 +350,7 @@ function renderAdminPlayersInTab(players, containerId) {
                     ${p.category ? `<span class="badge bg-secondary">${p.category}</span>` : ''}
                 </div>
                 <div class="player-card-admin-price">${price}</div>
+                ${mlBadge}
                 ${p.team_name ? `<div class="player-card-admin-info" style="color: #00d4ff;">Team: ${p.team_name}</div>` : ''}
                 
                 <div class="player-card-admin-actions">
@@ -369,6 +376,11 @@ function renderAdminPlayersInTab(players, containerId) {
         `;
 
         fragment.appendChild(card);
+        
+        // Load ML prediction asynchronously for available players
+        if (p.status !== 'sold') {
+            setTimeout(() => loadMLPredictionAdmin(p._id), 100);
+        }
     });
     
     // Clear and append all at once for better performance
@@ -2048,4 +2060,52 @@ if (document.readyState === 'loading') {
     setTimeout(() => {
         requestNotificationPermission();
     }, 2000);
+}
+
+
+// ============================================================
+// ML PREDICTION FUNCTIONS FOR ADMIN
+// ============================================================
+
+/**
+ * Load ML prediction for a player in admin panel
+ */
+async function loadMLPredictionAdmin(playerId) {
+    try {
+        const res = await api(`/ml/predict-player/${playerId}`);
+        if (!res || !res.ok) {
+            updateMLBadgeAdmin(playerId, null);
+            return;
+        }
+        
+        const data = await res.json();
+        
+        if (data.success) {
+            updateMLBadgeAdmin(playerId, {
+                predicted: data.predicted_price_formatted,
+                confidence: data.confidence_range,
+                current: data.current_base_price
+            });
+        } else {
+            updateMLBadgeAdmin(playerId, null);
+        }
+    } catch (error) {
+        console.error('ML Prediction error:', error);
+        updateMLBadgeAdmin(playerId, null);
+    }
+}
+
+/**
+ * Update ML prediction badge in admin player card
+ */
+function updateMLBadgeAdmin(playerId, prediction) {
+    const badge = document.getElementById(`ml-pred-admin-${playerId}`);
+    if (!badge) return;
+    
+    if (prediction) {
+        badge.innerHTML = `<span style="color: #fff; font-weight: 600;">🤖 AI: ${prediction.predicted}</span>`;
+        badge.title = `Confidence: ${prediction.confidence.min_formatted} - ${prediction.confidence.max_formatted}`;
+    } else {
+        badge.style.display = 'none';
+    }
 }

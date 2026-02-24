@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <!-- Background Circle -->
+  <circle cx="100" cy="100" r="95" fill="#1a1a2e" stroke="#ffd700" stroke-width="4"/>
+  
+  <!-- Outer Ring -->
+  <circle cx="100" cy="100" r="85" fill="none" stroke="#ffd700" stroke-width="2" opacity="0.3"/>
+  
+  <!-- Cricket Ball -->
+  <circle cx="100" cy="100" r="35" fill="#dc2626"/>
+  <path d="M 75 85 Q 100 95 125 85" stroke="#ffffff" stroke-width="2" fill="none"/>
+  <path d="M 75 115 Q 100 105 125 115" stroke="#ffffff" stroke-width="2" fill="none"/>
+  <line x1="73" y1="88" x2="70" y2="82" stroke="#ffffff" stroke-width="1.5"/>
+  <line x1="127" y1="88" x2="130" y2="82" stroke="#ffffff" stroke-width="1.5"/>
+  <line x1="73" y1="112" x2="70" y2="118" stroke="#ffffff" stroke-width="1.5"/>
+  <line x1="127" y1="112" x2="130" y2="118" stroke="#ffffff" stroke-width="1.5"/>
+  
+  <!-- Cricket Bat (Left) -->
+  <g transform="translate(40, 100) rotate(-30)">
+    <rect x="-3" y="-35" width="6" height="50" fill="#8b4513" rx="1"/>
+    <rect x="-8" y="-40" width="16" height="8" fill="#d2691e" rx="2"/>
+    <line x1="0" y1="-35" x2="0" y2="10" stroke="#654321" stroke-width="0.5"/>
+  </g>
+  
+  <!-- Cricket Bat (Right) -->
+  <g transform="translate(160, 100) rotate(30)">
+    <rect x="-3" y="-35" width="6" height="50" fill="#8b4513" rx="1"/>
+    <rect x="-8" y="-40" width="16" height="8" fill="#d2691e" rx="2"/>
+    <line x1="0" y1="-35" x2="0" y2="10" stroke="#654321" stroke-width="0.5"/>
+  </g>
+  
+  <!-- Gavel/Hammer (Auction Symbol) -->
+  <g transform="translate(100, 155)">
+    <!-- Hammer Head -->
+    <rect x="-12" y="-8" width="24" height="10" fill="#ffd700" rx="2"/>
+    <rect x="-10" y="-6" width="20" height="6" fill="#ffed4e" rx="1"/>
+    <!-- Handle -->
+    <rect x="-2" y="2" width="4" height="20" fill="#8b4513" rx="1"/>
+    <!-- Base -->
+    <ellipse cx="0" cy="24" rx="15" ry="3" fill="#1a1a2e" opacity="0.5"/>
+  </g>
+  
+  <!-- Decorative Stars -->
+  <g fill="#ffd700" opacity="0.6">
+    <path d="M 30 30 l 2 6 l 6 0 l -5 4 l 2 6 l -5 -4 l -5 4 l 2 -6 l -5 -4 l 6 0 z" transform="scale(0.6)"/>
+    <path d="M 170 30 l 2 6 l 6 0 l -5 4 l 2 6 l -5 -4 l -5 4 l 2 -6 l -5 -4 l 6 0 z" transform="scale(0.6)"/>
+  </g>
+  
+  <!-- Text Arc (Top) -->
+  <defs>
+    <path id="textArcTop" d="M 30,100 A 70,70 0 0,1 170,100" fill="none"/>
+  </defs>
+  <text font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#ffd700">
+    <textPath href="#textArcTop" startOffset="50%" text-anchor="middle">
+      CRICKET AUCTION
+    </textPath>
+  </text>
+  
+  <!-- Text Arc (Bottom) -->
+  <defs>
+    <path id="textArcBottom" d="M 170,100 A 70,70 0 0,1 30,100" fill="none"/>
+  </defs>
+  <text font-family="Arial, sans-serif" font-size="12" font-weight="normal" fill="#ffffff" opacity="0.8">
+    <textPath href="#textArcBottom" startOffset="50%" text-anchor="middle">
+      PLATFORM
+    </textPath>
+  </text>
+</svg>

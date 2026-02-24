@@ -210,8 +210,8 @@
     <script>
         async function loadDashboard() {
             try {
-                // Get auth token
-                const token = getCookie('access_token');
+                // Get auth token from localStorage (not cookies)
+                const token = localStorage.getItem('access_token');
                 if (!token) {
                     window.location.href = '/?error=login_required';
                     return;
@@ -223,14 +223,23 @@
                 
                 // Load stats
                 const statsRes = await fetch('/api/security/stats', { headers });
+                if (!statsRes.ok) {
+                    throw new Error(`Stats API failed: ${statsRes.status}`);
+                }
                 const stats = await statsRes.json();
                 
                 // Load blocked IPs
                 const blockedRes = await fetch('/api/security/blocked-ips', { headers });
+                if (!blockedRes.ok) {
+                    throw new Error(`Blocked IPs API failed: ${blockedRes.status}`);
+                }
                 const blocked = await blockedRes.json();
                 
                 // Load events
                 const eventsRes = await fetch('/api/security/events?limit=20', { headers });
+                if (!eventsRes.ok) {
+                    throw new Error(`Events API failed: ${eventsRes.status}`);
+                }
                 const events = await eventsRes.json();
                 
                 // Render stats
@@ -325,7 +334,7 @@
             if (!confirm(`Unblock IP ${ip}?`)) return;
             
             try {
-                const token = getCookie('access_token');
+                const token = localStorage.getItem('access_token');
                 const res = await fetch('/api/security/unblock-ip', {
                     method: 'POST',
                     headers: {

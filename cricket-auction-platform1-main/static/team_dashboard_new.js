@@ -9,6 +9,7 @@ let myPlayers = [];
 let allPlayers = [];
 let ws = null;
 let charts = {};
+let currentPlayerMLPrediction = null; // Store ML prediction for overbidding detection
 
 // Get authentication
 const token = localStorage.getItem('access_token');
@@ -49,13 +50,10 @@ async function refreshAccessToken() {
 }
 
 async function api(url, options = {}) {
-    // Always construct absolute HTTPS URLs for production
+    // Use current page protocol (HTTP for localhost, HTTPS for production)
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
-        // Relative URL - construct absolute HTTPS URL
-        url = `https://${window.location.host}${url}`;
-    } else if (url.startsWith('http://')) {
-        // Force HTTPS
-        url = url.replace('http://', 'https://');
+        // Relative URL - construct absolute URL with current protocol
+        url = `${window.location.protocol}//${window.location.host}${url}`;
     }
     
     const currentToken = localStorage.getItem('access_token');
@@ -202,6 +200,22 @@ async function loadLivePlayer(playerId) {
         if (!res) return;
         
         const player = await res.json();
+        
+        // Fetch ML prediction for overbidding detection
+        try {
+            const mlRes = await api(`/ml/predict-player/${playerId}`);
+            if (mlRes && mlRes.ok) {
+                const mlData = await mlRes.json();
+                if (mlData.success) {
+                    currentPlayerMLPrediction = mlData.predicted_price;
+                    console.log(`ML Prediction for ${player.name}: ₹${currentPlayerMLPrediction.toLocaleString()}`);
+                }
+            }
+        } catch (mlError) {
+            console.log('ML prediction not available:', mlError);
+            currentPlayerMLPrediction = null;
+        }
+        
         displayLivePlayer(player);
     } catch (error) {
         console.error('Error loading live player:', error);
@@ -259,6 +273,15 @@ function displayLivePlayer(player) {
                         <div class="bid-info-label">Leading Team</div>
                         <div class="bid-info-value">${isOwnPlayer ? '🎯 You' : leadingTeam}</div>
                     </div>
+                    ${currentPlayerMLPrediction ? `
+                    <div class="bid-info-item" style="background: linear-gradient(135deg, rgba(102, 126, 234, 0.2), rgba(118, 75, 162, 0.2)); border: 2px solid #667eea; border-radius: 10px; padding: 10px;">
+                        <div class="bid-info-label" style="color: #667eea;">🤖 AI Predicted Value</div>
+                        <div class="bid-info-value" style="color: #667eea;">₹${currentPlayerMLPrediction.toLocaleString()}</div>
+                        <small style="color: #94a3b8; font-size: 11px; display: block; margin-top: 5px;">
+                            Based on player statistics
+                        </small>
+                    </div>
+                    ` : ''}
                 </div>
             </div>
         </div>
@@ -273,9 +296,11 @@ function displayLivePlayer(player) {
                     min="${currentBid + 50}"
                     step="50"
                     value="${currentBid + 50}"
+                    oninput="checkOverbiddingRealtime()"
                     onkeypress="if(event.key === 'Enter') { event.preventDefault(); placeBid('${player._id}', event); }"
                     ${!canBid || isOwnPlayer ? 'disabled' : ''}
                 >
+                <div id="overbid-indicator" style="display: none; margin-top: 8px; padding: 8px 12px; border-radius: 8px; font-size: 13px; font-weight: 600;"></div>
             </div>
             
             <!-- Quick Bid Presets for Mobile -->
@@ -350,6 +375,20 @@ async function placeBid(playerId, event) {
     if (bidAmount > remaining) {
         showToast('Insufficient Budget', `You only have ₹${remaining.toLocaleString()} remaining`, 'error');
         return;
+    }
+    
+    // OVERBIDDING DETECTION - Check if bid exceeds ML prediction
+    if (currentPlayerMLPrediction && bidAmount > currentPlayerMLPrediction) {
+        const overpayAmount = bidAmount - currentPlayerMLPrediction;
+        const overpayPercentage = ((overpayAmount / currentPlayerMLPrediction) * 100).toFixed(1);
+        
+        // Show dramatic warning if overbidding by more than 20%
+        if (overpayPercentage > 20) {
+            const proceed = await showOverbiddingAlert(bidAmount, currentPlayerMLPrediction, overpayPercentage);
+            if (!proceed) {
+                return; // User cancelled the bid
+            }
+        }
     }
     
     try {
@@ -529,12 +568,19 @@ function createPlayerCard(player, isOwned) {
     const bowlingStyle = player.bowling_style || 'N/A';
     const bio = player.bio || 'No achievements/bio available';
     
-    return '<div class="player-card" onclick="showPlayerDetails(\'' + player._id + '\')" style="cursor: pointer;" title="Click to view details">' +
+    // ML Prediction badge (will be loaded asynchronously)
+    const mlBadge = !isOwned && player.status !== 'sold' ? 
+        '<div class="ml-prediction-badge" id="ml-pred-' + player._id + '" style="background: linear-gradient(135deg, #667eea, #764ba2); padding: 4px 8px; border-radius: 5px; margin-top: 5px; font-size: 0.7rem;">' +
+        '<span style="color: #fff;">🤖 AI: Loading...</span>' +
+        '</div>' : '';
+    
+    const cardHtml = '<div class="player-card" onclick="showPlayerDetails(\'' + player._id + '\')" style="cursor: pointer;" title="Click to view details">' +
             '<img src="' + imageSrc + '" class="player-card-img" alt="' + player.name + '">' +
             '<div class="player-card-name">' + player.name + '</div>' +
             '<div class="player-card-info">' + roleInfo + '</div>' +
             '<div class="player-card-price">' + price + '</div>' +
             teamInfo +
+            mlBadge +
             '<span class="status-badge ' + statusClass + '">' + statusText + '</span>' +
             '<div class="player-card-info" style="font-size: 0.75rem; color: #888; margin-top: 5px;">👁️ Click for details</div>' +
             // Hidden data for modal
@@ -551,6 +597,13 @@ function createPlayerCard(player, isOwned) {
             'data-price="' + price + '">' +
             '</div>' +
         '</div>';
+    
+    // Load ML prediction asynchronously for available players
+    if (!isOwned && player.status !== 'sold') {
+        setTimeout(() => loadMLPrediction(player._id), 100);
+    }
+    
+    return cardHtml;
 }
 
 // Initialize charts
@@ -1169,7 +1222,7 @@ window.setQuickBid = setQuickBid;
 
 
 // Show player details modal
-function showPlayerDetails(playerId) {
+async function showPlayerDetails(playerId) {
     // Find player in allPlayers array
     const player = allPlayers.find(p => p._id === playerId);
     if (!player) {
@@ -1183,6 +1236,19 @@ function showPlayerDetails(playerId) {
         if (player.image_path.startsWith('http') || player.image_path.includes('/static/uploads/players/')) {
             imageSrc = player.image_path;
         }
+    }
+    
+    // Load ML prediction for available players
+    let mlPredictionHTML = '';
+    if (player.status !== 'sold') {
+        mlPredictionHTML = `
+            <div id="ml-prediction-section" style="background: linear-gradient(135deg, #667eea, #764ba2); padding: 15px; border-radius: 10px; margin-bottom: 15px;">
+                <strong style="color: #fff;"><i class="fas fa-robot"></i> AI Price Prediction:</strong><br>
+                <div style="color: #fff; margin-top: 10px; font-size: 0.9rem;">
+                    <i class="fas fa-spinner fa-spin"></i> Loading prediction...
+                </div>
+            </div>
+        `;
     }
     
     const modalHTML = `
@@ -1202,6 +1268,8 @@ function showPlayerDetails(playerId) {
                             </div>
                             <div class="col-md-8">
                                 <h3 style="color: #ffd700; margin-bottom: 20px;">${player.name}</h3>
+                                
+                                ${mlPredictionHTML}
                                 
                                 <div class="row mb-3">
                                     <div class="col-6">
@@ -1266,8 +1334,733 @@ function showPlayerDetails(playerId) {
     const modal = new bootstrap.Modal(document.getElementById('playerDetailsModal'));
     modal.show();
     
+    // Load ML prediction asynchronously
+    if (player.status !== 'sold') {
+        loadMLPredictionForModal(playerId);
+    }
+    
     // Clean up modal after it's hidden
     document.getElementById('playerDetailsModal').addEventListener('hidden.bs.modal', function() {
         this.remove();
     });
+}
+
+
+// ============================================================
+// ML PREDICTION FUNCTIONS
+// ============================================================
+
+/**
+ * Load ML prediction for a player
+ */
+async function loadMLPrediction(playerId) {
+    try {
+        const res = await api(`/ml/predict-player/${playerId}`);
+        if (!res || !res.ok) {
+            updateMLBadge(playerId, null);
+            return;
+        }
+        
+        const data = await res.json();
+        
+        if (data.success) {
+            updateMLBadge(playerId, {
+                predicted: data.predicted_price_formatted,
+                confidence: data.confidence_range,
+                current: data.current_base_price
+            });
+        } else {
+            updateMLBadge(playerId, null);
+        }
+    } catch (error) {
+        console.error('ML Prediction error:', error);
+        updateMLBadge(playerId, null);
+    }
+}
+
+/**
+ * Update ML prediction badge in player card
+ */
+function updateMLBadge(playerId, prediction) {
+    const badge = document.getElementById(`ml-pred-${playerId}`);
+    if (!badge) return;
+    
+    if (prediction) {
+        badge.innerHTML = `<span style="color: #fff; font-weight: 600;">🤖 AI: ${prediction.predicted}</span>`;
+        badge.title = `Confidence: ${prediction.confidence.min_formatted} - ${prediction.confidence.max_formatted}`;
+    } else {
+        badge.style.display = 'none';
+    }
+}
+
+/**
+ * Load ML prediction for modal display
+ */
+async function loadMLPredictionForModal(playerId) {
+    const section = document.getElementById('ml-prediction-section');
+    if (!section) return;
+    
+    try {
+        const res = await api(`/ml/predict-player/${playerId}`);
+        if (!res || !res.ok) {
+            section.innerHTML = `
+                <strong style="color: #fff;"><i class="fas fa-robot"></i> AI Price Prediction:</strong><br>
+                <div style="color: #fff; margin-top: 10px; font-size: 0.9rem;">
+                    <i class="fas fa-exclamation-circle"></i> Prediction unavailable
+                </div>
+            `;
+            return;
+        }
+        
+        const data = await res.json();
+        
+        if (data.success) {
+            const difference = data.predicted_price - data.current_base_price;
+            const diffPercent = ((difference / data.current_base_price) * 100).toFixed(1);
+            const diffColor = difference > 0 ? '#10b981' : '#ef4444';
+            const diffIcon = difference > 0 ? '📈' : '📉';
+            
+            section.innerHTML = `
+                <strong style="color: #fff;"><i class="fas fa-robot"></i> AI Price Prediction:</strong><br>
+                <div style="color: #fff; margin-top: 10px;">
+                    <div style="font-size: 1.5rem; font-weight: bold; margin: 10px 0;">
+                        ${data.predicted_price_formatted}
+                    </div>
+                    <div style="font-size: 0.85rem; opacity: 0.9; margin-bottom: 8px;">
+                        Confidence Range: ${data.confidence_range.min_formatted} - ${data.confidence_range.max_formatted}
+                    </div>
+                    <div style="font-size: 0.85rem; color: ${diffColor};">
+                        ${diffIcon} ${difference > 0 ? '+' : ''}₹${Math.abs(difference).toLocaleString()} (${diffPercent > 0 ? '+' : ''}${diffPercent}%) vs Base Price
+                    </div>
+                    <div style="font-size: 0.75rem; opacity: 0.7; margin-top: 8px;">
+                        Model: ${data.model_used.replace('_', ' ').toUpperCase()}
+                    </div>
+                </div>
+            `;
+        } else {
+            section.innerHTML = `
+                <strong style="color: #fff;"><i class="fas fa-robot"></i> AI Price Prediction:</strong><br>
+                <div style="color: #fff; margin-top: 10px; font-size: 0.9rem;">
+                    <i class="fas fa-exclamation-circle"></i> Prediction unavailable
+                </div>
+            `;
+        }
+    } catch (error) {
+        console.error('ML Prediction error:', error);
+        section.innerHTML = `
+            <strong style="color: #fff;"><i class="fas fa-robot"></i> AI Price Prediction:</strong><br>
+            <div style="color: #fff; margin-top: 10px; font-size: 0.9rem;">
+                <i class="fas fa-exclamation-circle"></i> Error loading prediction
+            </div>
+        `;
+    }
+}
+
+
+// ============================================================
+// ML CALCULATOR FUNCTIONS
+// ============================================================
+
+/**
+ * Load all players into the search dropdown
+ */
+async function loadPlayersForMLCalculator() {
+    try {
+        const res = await api('/players');
+        if (!res || !res.ok) return;
+        
+        const data = await res.json();
+        const players = data.players || data;
+        
+        const dropdown = document.getElementById('ml-player-search');
+        if (!dropdown) return;
+        
+        // Clear existing options except first
+        dropdown.innerHTML = '<option value="">-- Select a player to auto-fill data --</option>';
+        
+        // Add players to dropdown
+        players.forEach(player => {
+            const option = document.createElement('option');
+            option.value = player._id;
+            option.textContent = `${player.name} (${player.role || 'Player'}) - ${player.status || 'Available'}`;
+            option.dataset.player = JSON.stringify(player);
+            dropdown.appendChild(option);
+        });
+        
+        console.log(`Loaded ${players.length} players into ML calculator`);
+    } catch (error) {
+        console.error('Error loading players for ML calculator:', error);
+    }
+}
+
+/**
+ * Load selected player's data into the form
+ */
+function loadPlayerData() {
+    const dropdown = document.getElementById('ml-player-search');
+    const selectedOption = dropdown.options[dropdown.selectedIndex];
+    
+    if (!selectedOption.value) {
+        // Reset form if no player selected
+        resetMLForm();
+        return;
+    }
+    
+    try {
+        const player = JSON.parse(selectedOption.dataset.player);
+        
+        // Set player type
+        document.getElementById('ml-player-type').value = player.role || 'Batsman';
+        updateFieldsForPlayerType();
+        
+        // Set statistics
+        document.getElementById('ml-matches').value = player.matches_played || 50;
+        document.getElementById('ml-batting-avg').value = player.batting_average || 25.0;
+        document.getElementById('ml-strike-rate').value = player.strike_rate || 120.0;
+        document.getElementById('ml-wickets').value = player.wickets || 10;
+        document.getElementById('ml-economy').value = player.economy_rate || 8.0;
+        document.getElementById('ml-performance').value = player.recent_performance_score || 70.0;
+        
+        showToast('Player Loaded', `${player.name}'s data has been loaded`, 'success');
+    } catch (error) {
+        console.error('Error loading player data:', error);
+        showToast('Error', 'Failed to load player data', 'error');
+    }
+}
+
+/**
+ * Update form fields based on player type
+ */
+function updateFieldsForPlayerType() {
+    const playerType = document.getElementById('ml-player-type').value;
+    const battingFields = document.getElementById('batting-fields');
+    const bowlingFields = document.getElementById('bowling-fields');
+    
+    // Show/hide fields based on player type
+    switch(playerType) {
+        case 'Batsman':
+        case 'Wicketkeeper':
+            // Show batting, hide bowling
+            battingFields.style.display = 'block';
+            bowlingFields.style.display = 'none';
+            // Set default bowling values for calculation
+            document.getElementById('ml-wickets').value = '5';
+            document.getElementById('ml-economy').value = '9.0';
+            break;
+            
+        case 'Bowler':
+            // Hide batting, show bowling
+            battingFields.style.display = 'none';
+            bowlingFields.style.display = 'block';
+            // Set default batting values for calculation
+            document.getElementById('ml-batting-avg').value = '15.0';
+            document.getElementById('ml-strike-rate').value = '100.0';
+            break;
+            
+        case 'All-Rounder':
+            // Show both
+            battingFields.style.display = 'block';
+            bowlingFields.style.display = 'block';
+            break;
+    }
+}
+
+/**
+ * Load ML model information
+ */
+async function loadMLModelInfo() {
+    try {
+        const res = await api('/ml/model-info');
+        if (!res || !res.ok) return;
+        
+        const data = await res.json();
+        
+        if (data.available) {
+            document.getElementById('model-name').textContent = data.model_name.replace('_', ' ').toUpperCase();
+            document.getElementById('model-accuracy').textContent = '75.31% (R²)';
+            document.getElementById('model-features').textContent = data.features ? data.features.length : '7';
+            document.getElementById('model-trained').textContent = data.trained_at || 'Recently';
+        } else {
+            document.getElementById('model-name').textContent = 'Not Available';
+            document.getElementById('model-accuracy').textContent = 'N/A';
+            document.getElementById('model-features').textContent = 'N/A';
+            document.getElementById('model-trained').textContent = 'N/A';
+        }
+    } catch (error) {
+        console.error('Error loading model info:', error);
+    }
+}
+
+/**
+ * Calculate ML prediction from manual input
+ */
+async function calculateMLPrediction() {
+    // Get input values
+    const matchesPlayed = parseInt(document.getElementById('ml-matches').value) || 0;
+    const battingAverage = parseFloat(document.getElementById('ml-batting-avg').value) || 0;
+    const strikeRate = parseFloat(document.getElementById('ml-strike-rate').value) || 0;
+    const wickets = parseInt(document.getElementById('ml-wickets').value) || 0;
+    const economy = parseFloat(document.getElementById('ml-economy').value) || 0;
+    const performance = parseFloat(document.getElementById('ml-performance').value) || 0;
+    const playerType = document.getElementById('ml-player-type').value;
+
+    // Validate inputs
+    if (matchesPlayed < 0 || battingAverage < 0 || strikeRate < 0 || wickets < 0 || economy < 0) {
+        showToast('Invalid Input', 'All values must be non-negative', 'error');
+        return;
+    }
+
+    if (performance < 0 || performance > 100) {
+        showToast('Invalid Input', 'Performance score must be between 0 and 100', 'error');
+        return;
+    }
+
+    // Show loading state
+    const resultsContainer = document.getElementById('ml-results-container');
+    resultsContainer.innerHTML = `
+        <div style="text-align: center; padding: 60px 20px;">
+            <i class="bi bi-hourglass-split" style="font-size: 64px; color: #667eea; margin-bottom: 20px; animation: spin 2s linear infinite;"></i>
+            <p style="color: #fff; font-size: 18px;">Calculating prediction...</p>
+        </div>
+    `;
+
+    try {
+        // Call ML API
+        const res = await api('/ml/predict-price', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                matches_played: matchesPlayed,
+                batting_average: battingAverage,
+                strike_rate: strikeRate,
+                wickets: wickets,
+                economy_rate: economy,
+                recent_performance_score: performance,
+                player_type: playerType
+            })
+        });
+
+        if (!res || !res.ok) {
+            throw new Error('Prediction failed');
+        }
+
+        const data = await res.json();
+
+        if (data.success) {
+            // Display results
+            displayMLResults(data, {
+                matchesPlayed,
+                battingAverage,
+                strikeRate,
+                wickets,
+                economy,
+                performance,
+                playerType
+            });
+            
+            showToast('Success', 'Prediction calculated successfully!', 'success');
+        } else {
+            throw new Error(data.error || 'Prediction failed');
+        }
+    } catch (error) {
+        console.error('ML Prediction error:', error);
+        resultsContainer.innerHTML = `
+            <div style="text-align: center; padding: 60px 20px;">
+                <i class="bi bi-exclamation-triangle" style="font-size: 64px; color: #ef4444; margin-bottom: 20px;"></i>
+                <p style="color: #ef4444; font-size: 18px; margin-bottom: 10px;">Prediction Failed</p>
+                <p style="color: #94a3b8; font-size: 14px;">${error.message}</p>
+            </div>
+        `;
+        showToast('Error', 'Failed to calculate prediction', 'error');
+    }
+}
+
+/**
+ * Display ML prediction results
+ */
+function displayMLResults(data, inputs) {
+    const resultsContainer = document.getElementById('ml-results-container');
+    
+    const predictedPrice = data.predicted_price;
+    const formattedPrice = data.predicted_price_formatted;
+    const confidence = data.confidence_range;
+    const modelUsed = data.model_used;
+
+    resultsContainer.innerHTML = `
+        <div style="animation: fadeIn 0.5s;">
+            <!-- Main Prediction -->
+            <div style="background: linear-gradient(135deg, #667eea, #764ba2); border-radius: 12px; padding: 25px; text-align: center; margin-bottom: 20px;">
+                <div style="color: rgba(255,255,255,0.9); font-size: 14px; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 1px;">
+                    Predicted Auction Price
+                </div>
+                <div style="color: #fff; font-size: 42px; font-weight: 700; margin-bottom: 15px;">
+                    ${formattedPrice}
+                </div>
+                <div style="color: rgba(255,255,255,0.8); font-size: 13px;">
+                    Model: ${modelUsed.replace('_', ' ').toUpperCase()}
+                </div>
+            </div>
+
+            <!-- Confidence Range -->
+            <div style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 12px; padding: 20px; margin-bottom: 20px;">
+                <h5 style="color: #10b981; margin-bottom: 15px; font-size: 16px;">
+                    <i class="bi bi-graph-up"></i> Confidence Range (±15%)
+                </h5>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                    <div>
+                        <div style="color: #94a3b8; font-size: 12px;">Minimum</div>
+                        <div style="color: #fff; font-size: 18px; font-weight: 600;">${confidence.min_formatted}</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <div style="color: #94a3b8; font-size: 12px;">Maximum</div>
+                        <div style="color: #fff; font-size: 18px; font-weight: 600;">${confidence.max_formatted}</div>
+                    </div>
+                </div>
+                <div style="background: rgba(255,255,255,0.1); height: 8px; border-radius: 4px; overflow: hidden;">
+                    <div style="background: linear-gradient(90deg, #10b981, #667eea); height: 100%; width: 100%;"></div>
+                </div>
+            </div>
+
+            <!-- Input Summary -->
+            <div style="background: rgba(17, 17, 17, 0.5); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 12px; padding: 20px;">
+                <h5 style="color: #ffd700; margin-bottom: 15px; font-size: 16px;">
+                    <i class="bi bi-list-check"></i> Input Statistics
+                </h5>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 13px;">
+                    <div>
+                        <span style="color: #94a3b8;">Matches:</span>
+                        <span style="color: #fff; float: right; font-weight: 600;">${inputs.matchesPlayed}</span>
+                    </div>
+                    <div>
+                        <span style="color: #94a3b8;">Batting Avg:</span>
+                        <span style="color: #fff; float: right; font-weight: 600;">${inputs.battingAverage.toFixed(1)}</span>
+                    </div>
+                    <div>
+                        <span style="color: #94a3b8;">Strike Rate:</span>
+                        <span style="color: #fff; float: right; font-weight: 600;">${inputs.strikeRate.toFixed(1)}</span>
+                    </div>
+                    <div>
+                        <span style="color: #94a3b8;">Wickets:</span>
+                        <span style="color: #fff; float: right; font-weight: 600;">${inputs.wickets}</span>
+                    </div>
+                    <div>
+                        <span style="color: #94a3b8;">Economy:</span>
+                        <span style="color: #fff; float: right; font-weight: 600;">${inputs.economy.toFixed(1)}</span>
+                    </div>
+                    <div>
+                        <span style="color: #94a3b8;">Performance:</span>
+                        <span style="color: #fff; float: right; font-weight: 600;">${inputs.performance}/100</span>
+                    </div>
+                    <div style="grid-column: 1 / -1;">
+                        <span style="color: #94a3b8;">Player Type:</span>
+                        <span style="color: #fff; float: right; font-weight: 600;">${inputs.playerType}</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tips -->
+            <div style="margin-top: 20px; padding: 15px; background: rgba(102, 126, 234, 0.1); border-left: 4px solid #667eea; border-radius: 8px;">
+                <div style="color: #667eea; font-size: 13px; margin-bottom: 5px; font-weight: 600;">
+                    <i class="bi bi-lightbulb-fill"></i> Bidding Tip
+                </div>
+                <div style="color: #94a3b8; font-size: 12px;">
+                    This prediction is based on statistical analysis. Consider the confidence range when planning your bids. 
+                    The actual auction price may vary based on team strategies and competition.
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+/**
+ * Reset ML calculator form
+ */
+function resetMLForm() {
+    document.getElementById('ml-matches').value = '100';
+    document.getElementById('ml-batting-avg').value = '35.0';
+    document.getElementById('ml-strike-rate').value = '130.0';
+    document.getElementById('ml-wickets').value = '15';
+    document.getElementById('ml-economy').value = '8.0';
+    document.getElementById('ml-performance').value = '75';
+    document.getElementById('ml-player-type').value = 'Batsman';
+    
+    // Update field visibility
+    updateFieldsForPlayerType();
+    
+    // Reset results
+    const resultsContainer = document.getElementById('ml-results-container');
+    resultsContainer.innerHTML = `
+        <div style="text-align: center; padding: 60px 20px; color: #94a3b8;">
+            <i class="bi bi-robot" style="font-size: 64px; color: #667eea; margin-bottom: 20px;"></i>
+            <p>Select player type, enter statistics, and click "Calculate Price Prediction" to see AI-powered estimates</p>
+        </div>
+    `;
+    
+    showToast('Reset', 'Form has been reset to default values', 'success');
+}
+
+// Load model info and set initial field visibility when ML calculator tab is opened
+const originalSwitchTab = switchTab;
+switchTab = function(tabName) {
+    originalSwitchTab(tabName);
+    if (tabName === 'ml-calculator') {
+        loadMLModelInfo();
+        loadPlayersForMLCalculator(); // Load players into dropdown
+        updateFieldsForPlayerType(); // Set initial field visibility
+    }
+};
+
+
+/**
+ * ============================================================
+ * OVERBIDDING DETECTION SYSTEM
+ * Shows dramatic full-screen red alert when team is overpaying
+ * ============================================================
+ */
+
+function showOverbiddingAlert(bidAmount, predictedPrice, overpayPercentage) {
+    return new Promise((resolve) => {
+        // Create full-screen overlay
+        const overlay = document.createElement('div');
+        overlay.id = 'overbidding-alert-overlay';
+        overlay.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(220, 38, 38, 0.95);
+            z-index: 99999;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            animation: redPulse 1.5s ease-in-out infinite;
+        `;
+        
+        // Add pulsing animation
+        const style = document.createElement('style');
+        style.textContent = `
+            @keyframes redPulse {
+                0%, 100% { background: rgba(220, 38, 38, 0.95); }
+                50% { background: rgba(185, 28, 28, 0.98); }
+            }
+            @keyframes shake {
+                0%, 100% { transform: translateX(0); }
+                10%, 30%, 50%, 70%, 90% { transform: translateX(-10px); }
+                20%, 40%, 60%, 80% { transform: translateX(10px); }
+            }
+            @keyframes warningBlink {
+                0%, 100% { opacity: 1; }
+                50% { opacity: 0.3; }
+            }
+        `;
+        document.head.appendChild(style);
+        
+        // Create alert content
+        const alertBox = document.createElement('div');
+        alertBox.style.cssText = `
+            background: #000000;
+            border: 5px solid #ef4444;
+            border-radius: 20px;
+            padding: 50px;
+            max-width: 600px;
+            text-align: center;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8);
+            animation: shake 0.5s ease-in-out;
+        `;
+        
+        alertBox.innerHTML = `
+            <div style="font-size: 80px; margin-bottom: 20px; animation: warningBlink 1s ease-in-out infinite;">
+                ⚠️
+            </div>
+            
+            <h2 style="color: #ef4444; font-size: 36px; font-weight: 800; margin-bottom: 20px; text-transform: uppercase; letter-spacing: 2px;">
+                🤖 AI ALERT: OVERBIDDING!
+            </h2>
+            
+            <div style="background: rgba(239, 68, 68, 0.2); border: 2px solid #ef4444; border-radius: 12px; padding: 25px; margin: 30px 0;">
+                <div style="color: #fff; font-size: 18px; margin-bottom: 15px;">
+                    You are about to overpay by
+                </div>
+                <div style="color: #ffd700; font-size: 48px; font-weight: 900; margin: 15px 0;">
+                    ${overpayPercentage}%
+                </div>
+                <div style="color: #94a3b8; font-size: 14px; margin-top: 15px;">
+                    Overpaying: ₹${(bidAmount - predictedPrice).toLocaleString()}
+                </div>
+            </div>
+            
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 30px 0; text-align: left;">
+                <div style="background: rgba(255, 255, 255, 0.05); padding: 20px; border-radius: 12px;">
+                    <div style="color: #94a3b8; font-size: 14px; margin-bottom: 8px;">Your Bid</div>
+                    <div style="color: #ef4444; font-size: 28px; font-weight: 700;">₹${bidAmount.toLocaleString()}</div>
+                </div>
+                <div style="background: rgba(255, 255, 255, 0.05); padding: 20px; border-radius: 12px;">
+                    <div style="color: #94a3b8; font-size: 14px; margin-bottom: 8px;">AI Predicted Value</div>
+                    <div style="color: #10b981; font-size: 28px; font-weight: 700;">₹${predictedPrice.toLocaleString()}</div>
+                </div>
+            </div>
+            
+            <div style="background: rgba(251, 191, 36, 0.1); border-left: 4px solid #fbbf24; padding: 15px; margin: 25px 0; text-align: left; border-radius: 8px;">
+                <div style="color: #fbbf24; font-weight: 600; margin-bottom: 8px;">
+                    <i class="bi bi-lightbulb-fill"></i> AI Recommendation
+                </div>
+                <div style="color: #cbd5e1; font-size: 14px; line-height: 1.6;">
+                    Based on player statistics and market analysis, this bid significantly exceeds the predicted fair value. 
+                    Consider bidding closer to ₹${Math.round(predictedPrice * 1.1).toLocaleString()} (10% premium).
+                </div>
+            </div>
+            
+            <div style="display: flex; gap: 15px; margin-top: 35px;">
+                <button id="cancel-bid-btn" style="
+                    flex: 1;
+                    padding: 18px;
+                    background: linear-gradient(135deg, #10b981, #059669);
+                    color: #fff;
+                    border: none;
+                    border-radius: 12px;
+                    font-size: 18px;
+                    font-weight: 700;
+                    cursor: pointer;
+                    transition: all 0.3s;
+                ">
+                    <i class="bi bi-x-circle"></i> Cancel Bid
+                </button>
+                <button id="proceed-bid-btn" style="
+                    flex: 1;
+                    padding: 18px;
+                    background: rgba(239, 68, 68, 0.2);
+                    color: #ef4444;
+                    border: 2px solid #ef4444;
+                    border-radius: 12px;
+                    font-size: 18px;
+                    font-weight: 700;
+                    cursor: pointer;
+                    transition: all 0.3s;
+                ">
+                    <i class="bi bi-exclamation-triangle"></i> Proceed Anyway
+                </button>
+            </div>
+            
+            <div style="color: #64748b; font-size: 12px; margin-top: 20px; font-style: italic;">
+                This is an AI-powered warning to help you make informed decisions
+            </div>
+        `;
+        
+        overlay.appendChild(alertBox);
+        document.body.appendChild(overlay);
+        
+        // Add button event listeners
+        document.getElementById('cancel-bid-btn').addEventListener('click', () => {
+            document.body.removeChild(overlay);
+            document.head.removeChild(style);
+            resolve(false); // Don't proceed with bid
+        });
+        
+        document.getElementById('proceed-bid-btn').addEventListener('click', () => {
+            document.body.removeChild(overlay);
+            document.head.removeChild(style);
+            resolve(true); // Proceed with bid
+        });
+        
+        // Add hover effects
+        const cancelBtn = document.getElementById('cancel-bid-btn');
+        const proceedBtn = document.getElementById('proceed-bid-btn');
+        
+        cancelBtn.addEventListener('mouseenter', () => {
+            cancelBtn.style.transform = 'translateY(-2px)';
+            cancelBtn.style.boxShadow = '0 10px 25px rgba(16, 185, 129, 0.4)';
+        });
+        cancelBtn.addEventListener('mouseleave', () => {
+            cancelBtn.style.transform = 'translateY(0)';
+            cancelBtn.style.boxShadow = 'none';
+        });
+        
+        proceedBtn.addEventListener('mouseenter', () => {
+            proceedBtn.style.transform = 'translateY(-2px)';
+            proceedBtn.style.boxShadow = '0 10px 25px rgba(239, 68, 68, 0.4)';
+        });
+        proceedBtn.addEventListener('mouseleave', () => {
+            proceedBtn.style.transform = 'translateY(0)';
+            proceedBtn.style.boxShadow = 'none';
+        });
+    });
+}
+
+// Initialize dashboard on page load
+document.addEventListener('DOMContentLoaded', init);
+
+
+/**
+ * Real-time overbidding indicator
+ * Changes color as user types bid amount
+ */
+function checkOverbiddingRealtime() {
+    const bidInput = document.getElementById('bid-amount');
+    const indicator = document.getElementById('overbid-indicator');
+    
+    if (!bidInput || !indicator || !currentPlayerMLPrediction) {
+        return;
+    }
+    
+    const bidAmount = parseInt(bidInput.value);
+    
+    if (!bidAmount || bidAmount <= 0) {
+        indicator.style.display = 'none';
+        bidInput.style.borderColor = 'rgba(255, 255, 255, 0.1)';
+        return;
+    }
+    
+    const difference = bidAmount - currentPlayerMLPrediction;
+    const percentage = ((difference / currentPlayerMLPrediction) * 100).toFixed(1);
+    
+    if (bidAmount > currentPlayerMLPrediction) {
+        // Overbidding
+        indicator.style.display = 'block';
+        
+        if (percentage > 50) {
+            // Extreme overbidding
+            indicator.style.background = 'rgba(220, 38, 38, 0.2)';
+            indicator.style.border = '2px solid #dc2626';
+            indicator.style.color = '#dc2626';
+            indicator.innerHTML = `⚠️ EXTREME OVERBID: +${percentage}% (₹${difference.toLocaleString()} over AI value)`;
+            bidInput.style.borderColor = '#dc2626';
+            bidInput.style.boxShadow = '0 0 20px rgba(220, 38, 38, 0.4)';
+        } else if (percentage > 20) {
+            // High overbidding
+            indicator.style.background = 'rgba(239, 68, 68, 0.2)';
+            indicator.style.border = '2px solid #ef4444';
+            indicator.style.color = '#ef4444';
+            indicator.innerHTML = `⚠️ Overbidding: +${percentage}% (₹${difference.toLocaleString()} over AI value)`;
+            bidInput.style.borderColor = '#ef4444';
+            bidInput.style.boxShadow = '0 0 15px rgba(239, 68, 68, 0.3)';
+        } else {
+            // Slight overbidding
+            indicator.style.background = 'rgba(251, 191, 36, 0.2)';
+            indicator.style.border = '2px solid #fbbf24';
+            indicator.style.color = '#fbbf24';
+            indicator.innerHTML = `⚡ Slight premium: +${percentage}% (₹${difference.toLocaleString()} over AI value)`;
+            bidInput.style.borderColor = '#fbbf24';
+            bidInput.style.boxShadow = '0 0 10px rgba(251, 191, 36, 0.2)';
+        }
+    } else if (bidAmount < currentPlayerMLPrediction * 0.8) {
+        // Great value
+        indicator.style.display = 'block';
+        indicator.style.background = 'rgba(16, 185, 129, 0.2)';
+        indicator.style.border = '2px solid #10b981';
+        indicator.style.color = '#10b981';
+        const savings = currentPlayerMLPrediction - bidAmount;
+        indicator.innerHTML = `✅ Great Value! ${Math.abs(percentage).toFixed(1)}% below AI value (Save ₹${savings.toLocaleString()})`;
+        bidInput.style.borderColor = '#10b981';
+        bidInput.style.boxShadow = '0 0 10px rgba(16, 185, 129, 0.2)';
+    } else {
+        // Fair value
+        indicator.style.display = 'block';
+        indicator.style.background = 'rgba(102, 126, 234, 0.2)';
+        indicator.style.border = '2px solid #667eea';
+        indicator.style.color = '#667eea';
+        indicator.innerHTML = `✓ Fair Value (Within AI predicted range)`;
+        bidInput.style.borderColor = '#667eea';
+        bidInput.style.boxShadow = '0 0 10px rgba(102, 126, 234, 0.2)';
+    }
 }
